@@ -4,6 +4,7 @@ from __future__ import division
 import argparse
 import math
 import sys
+import random
 import dynet as dy
 from embedder import *
 from attender import *
@@ -78,37 +79,35 @@ def xnmt_train(args, run_for_epochs=None, encoder_builder=BiLSTMEncoder, encoder
     train_corpus_source, train_corpus_target = batcher.pack(train_corpus_source, train_corpus_target)
     dev_corpus_source, dev_corpus_target = batcher.pack(dev_corpus_source, dev_corpus_target)
     logger = BatchLogger(args.eval_every, total_train_sent)
+  training_order = list(range(len(train_corpus_source)))
 
   # Main training loop
+  while run_for_epochs is None or logger.fractional_epoch() < run_for_epochs:
+    random.shuffle(training_order)
 
-  while run_for_epochs is None or logger.epoch_num < run_for_epochs:
-
-    logger.new_epoch()
-
-    for batch_num, (src, tgt) in enumerate(zip(train_corpus_source, train_corpus_target)):
+    for src, tgt in [(train_corpus_source[i], train_corpus_target[i]) for i in training_order]:
 
       # Loss calculation
       dy.renew_cg()
       loss = translator.calc_loss(src, tgt)
-      logger.update_epoch_loss(src, tgt, loss.value())
+      logger.update_train_loss(src, tgt, loss.value())
 
       loss.backward()
       trainer.update()
 
-      # Devel reporting
-      if logger.report_train_process():
+      if logger.needs_report_train():
+        logger.report_train(do_clear=True)
 
-        logger.new_dev()
+      if logger.needs_report_dev():
         for src, tgt in zip(dev_corpus_source, dev_corpus_target):
           dy.renew_cg()
           loss = translator.calc_loss(src, tgt).value()
           logger.update_dev_loss(tgt, loss)
-
+        logger.report_dev()
         # Write out the model if it's the best one
-        if logger.report_dev_and_check_model(args.model_file):
+        if logger.needs_write_model():
           model_serializer.save_to_file(args.model_file, model_params, model)
-
-    trainer.update_epoch()
+        logger.clear_dev()
 
   return math.exp(logger.epoch_loss / logger.epoch_words), math.exp(logger.dev_loss / logger.dev_words)
 
